@@ -140,7 +140,7 @@ st.markdown("""
     box-shadow: 0 6px 26px rgba(79,70,229,0.52) !important;
     transform: translateY(-1px) !important;
 }
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
 @media (max-width: 640px) {
     .main .block-container { padding: 0.9rem; }
     .hero { padding: 18px 20px; }
