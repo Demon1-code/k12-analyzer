@@ -4,6 +4,7 @@ import re
 import io
 from pathlib import Path
 from datetime import datetime
+import knowledge_base as kb
 
 st.set_page_config(
     page_title="K12教培客户画像分析器",
@@ -544,21 +545,21 @@ def rule_based_analysis(data: dict) -> dict:
 
 # ─── Gemini Analysis ──────────────────────────────────────────────────────────
 
-def analyze_with_gemini(api_key: str, data: dict) -> dict:
+def analyze_with_gemini(api_key: str, data: dict, kb_snippets: str = "") -> dict:
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError:
-        raise RuntimeError("缺少依赖包，请执行：pip install google-generativeai")
+        raise RuntimeError("缺少依赖包，请执行：pip install google-genai")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=api_key)
 
-    subjects_str  = "、".join(data["subjects"])  if data["subjects"]       else "未指定"
-    concerns_str  = "、".join(data["concerns"])  if data["concerns"]       else "未指定"
-    signals_str   = "、".join(data["intent_signals"]) if data["intent_signals"] else "未指定"
-    notes_str     = data["notes"] if data["notes"] else "无"
+    subjects_str = "、".join(data["subjects"])      if data["subjects"]       else "未指定"
+    concerns_str = "、".join(data["concerns"])      if data["concerns"]       else "未指定"
+    signals_str  = "、".join(data["intent_signals"]) if data["intent_signals"] else "未指定"
+    notes_str    = data["notes"] if data["notes"] else "无"
 
-    prompt = f"""你是一名有15年经验的K12教培行业金牌销售顾问。请深度分析以下客户信息，给出专业画像和跟进策略。
+    kb_context = f"{kb_snippets}\n\n---\n\n" if kb_snippets else ""
+    prompt = f"""{kb_context}你是一名有15年经验的K12教培行业金牌销售顾问。请深度分析以下客户信息，给出专业画像和跟进策略。
 
 ## 客户信息
 - 家长称呼：{data['parent_name'] or '未填写'}
@@ -595,16 +596,18 @@ def analyze_with_gemini(api_key: str, data: dict) -> dict:
 
 只输出JSON，不要有任何其他文字或markdown标记。"""
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     text = response.text.strip()
 
-    # Strip markdown fences if present
     text = re.sub(r"^```(?:json)?\s*\n?", "", text)
     text = re.sub(r"\n?```\s*$", "", text)
     text = text.strip()
 
     result = json.loads(text)
-    result["analysis_method"] = "AI智能分析（Gemini 2.5 Flash）"
+    result["analysis_method"] = (
+        "AI智能分析（Gemini 2.5 Flash · RAG知识库）" if kb_snippets
+        else "AI智能分析（Gemini 2.5 Flash）"
+    )
     return result
 
 
@@ -636,6 +639,93 @@ def tags_html(items: list, cls: str = "tag-blue") -> str:
     return "".join(
         f'<span class="tag {cls}">{i}</span>' for i in items
     )
+
+
+# ─── KB References Panel ──────────────────────────────────────────────────────
+
+def render_kb_references(kb_refs: dict) -> None:
+    if not kb_refs:
+        return
+
+    spin_focus = kb_refs.get("spin_focus", {})
+    principles = kb_refs.get("influence_principles", [])
+    examples   = kb_refs.get("spin_question_examples", [])
+
+    st.markdown('<div class="result-section">策略依据</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        emphasis_map = {
+            "多用": ("#4f46e5", "700"), "深入": ("#4f46e5", "700"),
+            "慎用": ("#dc2626", "600"), "少":   ("#9ca3af", "400"),
+            "轻触": ("#f59e0b", "600"), "适中": ("#64748b", "400"),
+        }
+        spin_rows = ""
+        for key, label in [("S", "情境"), ("P", "问题发现"), ("I", "暗示后果"), ("N", "价值确认")]:
+            val = spin_focus.get(key, "适中")
+            color, weight = emphasis_map.get(val, ("#64748b", "400"))
+            spin_rows += (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'padding:6px 0;border-bottom:1px solid #f1f5f9;">'
+                f'<span style="font-size:.84rem;color:#475569;"><b>{key}</b>&nbsp;{label}问题</span>'
+                f'<span style="font-size:.82rem;font-weight:{weight};color:{color};">{val}</span>'
+                f'</div>'
+            )
+        note = spin_focus.get("note", "")
+        note_html = (
+            f'<div style="font-size:.78rem;color:#6b7280;margin-top:8px;'
+            f'line-height:1.5;font-style:italic;">{note}</div>'
+        ) if note else ""
+        st.markdown(f"""
+        <div style="background:#f8f9ff;border-radius:10px;padding:14px 16px;">
+          <div style="font-weight:700;color:#4f46e5;margin-bottom:10px;font-size:.88rem;">
+            📊 SPIN 提问策略
+          </div>
+          {spin_rows}
+          {note_html}
+        </div>""", unsafe_allow_html=True)
+
+    with c2:
+        colors = ["#0ea5e9", "#8b5cf6", "#f59e0b", "#10b981"]
+        cards = ""
+        for i, p in enumerate(principles[:3]):
+            c = colors[i % len(colors)]
+            acts = " · ".join(p.get("actions", [])[:2])
+            cards += (
+                f'<div style="margin-bottom:10px;padding:9px 12px;background:white;'
+                f'border-radius:8px;border-left:3px solid {c};">'
+                f'<div style="font-weight:600;color:{c};font-size:.84rem;">{p["name"]}</div>'
+                f'<div style="font-size:.78rem;color:#64748b;margin-top:3px;line-height:1.4;">'
+                f'{acts}</div>'
+                f'</div>'
+            )
+        st.markdown(f"""
+        <div style="background:#f8f9ff;border-radius:10px;padding:14px 16px;">
+          <div style="font-weight:700;color:#7c3aed;margin-bottom:10px;font-size:.88rem;">
+            🎯 影响力原则
+          </div>
+          {cards or '<div style="color:#9ca3af;font-size:.85rem;">—</div>'}
+        </div>""", unsafe_allow_html=True)
+
+    if examples:
+        st.markdown("<br>", unsafe_allow_html=True)
+        q_rows = "".join(
+            f'<div style="padding:7px 0;border-bottom:1px solid #fef9c3;'
+            f'font-size:.85rem;color:#334155;">❓ {q}</div>'
+            for q in examples
+        )
+        st.markdown(f"""
+        <div style="background:#fffbeb;border-radius:10px;padding:14px 16px;
+                    border:1px solid #fde68a;margin-top:2px;">
+          <div style="font-weight:700;color:#92400e;margin-bottom:8px;font-size:.88rem;">
+            💡 参考提问示例（I 暗示后果 / N 价值确认）
+          </div>
+          {q_rows}
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ─── Main App ─────────────────────────────────────────────────────────────────
@@ -704,6 +794,17 @@ def main():
                 </div>""", unsafe_allow_html=True)
 
         st.divider()
+
+        st.markdown("**📚 知识库模式**")
+        kb_mode = st.radio(
+            "kb_mode_label",
+            options=["自动（有网用RAG，断网用规则）", "仅规则", "仅RAG"],
+            key="kb_mode_sel",
+            label_visibility="collapsed",
+            help="自动：有API时注入知识库增强AI分析；仅规则：始终离线规则；仅RAG：强制RAG（需API Key）",
+        )
+        st.divider()
+
         st.markdown("""
         <div style="font-size:.82rem; color:#64748b; line-height:1.9;">
           <b>📌 使用步骤</b><br>
@@ -778,9 +879,14 @@ def main():
 
         with st.spinner(f"🤔 正在深度分析 {display_name} 的客户画像…"):
             result = None
-            if api_key:
+            use_gemini = bool(api_key) and kb_mode != "仅规则"
+            use_rag    = kb_mode in ("自动（有网用RAG，断网用规则）", "仅RAG")
+
+            if use_gemini:
+                profile_hint, _ = _determine_profile(data)
+                kb_text = kb.get_rag_snippets(profile_hint, data) if use_rag else ""
                 try:
-                    result = analyze_with_gemini(api_key, data)
+                    result = analyze_with_gemini(api_key, data, kb_text)
                 except Exception as e:
                     err = str(e)
                     if any(k in err.upper() for k in ("API_KEY", "INVALID", "AUTH", "PERMISSION")):
@@ -789,7 +895,14 @@ def main():
                         st.warning(f"⚠️ AI 分析遇到问题（{err[:70]}），已自动切换至规则分析模式")
                     result = rule_based_analysis(data)
             else:
+                if kb_mode == "仅RAG" and not api_key:
+                    st.warning("⚠️ 仅RAG模式需要配置 Gemini API Key，已自动切换至规则分析模式")
                 result = rule_based_analysis(data)
+
+        # 附加知识库引用（供策略依据面板显示）
+        result["kb_references"] = kb.get_kb_references(
+            result.get("profile_type", "佛系型"), data
+        )
 
         # 自动保存 API Key
         if api_key and api_key != saved_key:
@@ -959,6 +1072,12 @@ def main():
     st.markdown(f'<div style="background:#fafafa;border-radius:10px;padding:6px 14px;">{rows}</div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── KB References ────────────────────────────────────────────────────────
+    kb_refs = result.get("kb_references")
+    if kb_refs:
+        st.markdown("<br>", unsafe_allow_html=True)
+        render_kb_references(kb_refs)
 
     # ── Export ───────────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
